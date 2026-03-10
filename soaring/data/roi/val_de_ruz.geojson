@@ -1,0 +1,20 @@
+{
+  "type": "Feature",
+  "geometry": {
+    "type": "Polygon",
+    "coordinates": [[
+      [6.85, 47.00],
+      [7.05, 47.00],
+      [7.05, 47.10],
+      [6.85, 47.10],
+      [6.85, 47.00]
+    ]]
+  },
+  "properties": {
+    "name": "Val de Ruz",
+    "description": "Val de Ruz valley, Neuchâtel, Switzerland - thermal soaring region",
+    "country": "Switzerland",
+    "region": "Neuchâtel",
+    "area_approx_km2": 400
+  }
+}
