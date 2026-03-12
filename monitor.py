@@ -1,4 +1,5 @@
 from pymavlink import mavutil
+import math
 import time
 import threading
 
@@ -6,21 +7,29 @@ master = mavutil.mavlink_connection('udp:127.0.0.1:14550')
 master.wait_heartbeat()
 print(f"Connected: system {master.target_system}, component {master.target_component}")
 
-# ── Request all needed message streams ──────────────────────────────────────
-def request_stream(master, stream_id, rate_hz):
-    master.mav.request_data_stream_send(
-        master.target_system, master.target_component,
-        stream_id, rate_hz, 1
-    )
+# ── Request message streams ───────────────────────────────────────────────────
+# Legacy stream request for common messages (VFR_HUD, GPS, SYS_STATUS, etc.)
+master.mav.request_data_stream_send(
+    master.target_system, master.target_component,
+    mavutil.mavlink.MAV_DATA_STREAM_ALL, 4, 1,
+)
 
-request_stream(master, mavutil.mavlink.MAV_DATA_STREAM_ALL, 4)
+# WIND_COV must be requested explicitly — it is not included in any stream group
+master.mav.command_long_send(
+    master.target_system, master.target_component,
+    mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+    0,
+    float(mavutil.mavlink.MAVLINK_MSG_ID_WIND_COV),  # message ID 231
+    500_000.0,   # interval µs → 2 Hz
+    0, 0, 0, 0, 0,
+)
 
 # ── Telemetry state ──────────────────────────────────────────────────────────
 telem = {
     'gps':      {'lat': None, 'lon': None, 'alt': None, 'fix': None, 'sats': None, 'hdop': None},
     'airspeed': {'airspeed': None, 'groundspeed': None, 'heading': None, 'climb': None, 'throttle': None},
     'battery':  {'voltage': None, 'current': None, 'remaining': None},
-    'wind':     {'dir': None, 'speed': None, 'speed_z': None},
+    'wind':     {'north': None, 'east': None, 'speed': None, 'dir': None, 'climb': None},
     'vfr':      {'alt': None},
     'status':   {'armed': None, 'mode': None, 'health': None},
 }
@@ -68,6 +77,7 @@ def parse_messages():
             telem['airspeed']['heading']     = msg.heading
             telem['airspeed']['climb']       = msg.climb
             telem['airspeed']['throttle']    = msg.throttle
+            telem['wind']['climb']           = msg.climb   # vertical speed proxy for thermal lift
 
         elif t == 'SYS_STATUS':
             telem['battery']['voltage']   = msg.voltage_battery / 1000.0
@@ -80,10 +90,20 @@ def parse_messages():
                 telem['battery']['voltage'] = msg.voltages[0] / 1000.0
             telem['battery']['remaining'] = msg.battery_remaining
 
-        elif t == 'WIND':
-            telem['wind']['dir']     = msg.direction
-            telem['wind']['speed']   = msg.speed
-            telem['wind']['speed_z'] = msg.speed_z
+        elif t == 'WIND_COV':
+            # PX4 publishes wind_x=north, wind_y=east (NED), wind_z is always 0
+            north = msg.wind_x
+            east  = msg.wind_y
+            telem['wind']['north'] = north
+            telem['wind']['east']  = east
+            speed = math.hypot(north, east)
+            telem['wind']['speed'] = speed
+            # meteorological "from" direction: bearing wind travels toward, then +180°
+            if speed > 0.1:
+                toward_deg = math.degrees(math.atan2(east, north)) % 360
+                telem['wind']['dir'] = (toward_deg + 180.0) % 360
+            else:
+                telem['wind']['dir'] = 0.0
 
         elif t == 'HEARTBEAT':
             armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
@@ -144,9 +164,10 @@ def print_telem():
         '\033[1m\n  BATTERY\033[0m',
         f'    Voltage : {fmt(b["voltage"], "V")}   Current: {fmt(b["current"], "A")}',
         f'    Charge  : {battery_color(b["remaining"])}',
-        '\033[1m\n  WIND ESTIMATE\033[0m',
-        f'    Direction : {fmt(w["dir"], "°", 0)}   Speed: {fmt(w["speed"], " m/s")}',
-        f'    Vertical  : {fmt(w["speed_z"], " m/s")}  <- thermal proxy (positive = updraft)',
+        '\033[1m\n  WIND ESTIMATE  \033[90m(EKF2)\033[0m',
+        f'    Direction : {fmt(w["dir"], "°", 0)}   Speed  : {fmt(w["speed"], " m/s")}',
+        f'    N/E       : {fmt(w["north"], " m/s")} / {fmt(w["east"], " m/s")}',
+        f'    Climb     : {fmt(w["climb"], " m/s")}  \033[90m← vspeed proxy (positive = updraft)\033[0m',
         '\033[90m\n  Ctrl+C to exit\033[0m',
     ]
 

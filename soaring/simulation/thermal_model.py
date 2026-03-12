@@ -57,7 +57,7 @@ import numpy as np
 W_MAX_MIN   = 0.5    # m/s  minimum peak updraft  (P=0)
 W_MAX_MAX   = 5.0    # m/s  maximum peak updraft  (P=1)
 T_LIFE_MIN  = 180.0  # s    minimum lifespan      (P=0)
-T_LIFE_MAX  = 1200.0 # s    maximum lifespan      (P=1)
+T_LIFE_MAX  = 6000.0 # s    maximum lifespan      (P=1)
 R_BASE_MIN  = 50.0   # m    minimum radius        (P=0)
 R_BASE_MAX  = 200.0  # m    maximum radius        (P=1)
 SINK_RATIO  = 0.5    # downdraft strength relative to peak updraft
@@ -95,7 +95,6 @@ class ThermalState:
 
         # ── physical parameters derived from p_val + noise ─────────────
         def _lmap(p, v_min, v_max):
-            #TODO: maybe uniform distribution would be better than linear mapping + lognormal noise?
             return v_min + p * (v_max - v_min)
 
         def _noisy(val):
@@ -106,8 +105,9 @@ class ThermalState:
         self.R      = _noisy(_lmap(self.p_val, R_BASE_MIN, R_BASE_MAX))
 
         # Gaussian lifecycle: peak at 50% of T_life
-        self._mu    = 0.5  * self.T_life
-        self._sigma = 0.25 * self.T_life
+        self._mu      = 0.5  * self.T_life
+        self._sigma   = 0.25 * self.T_life
+        self._inv_sigma = 1.0 / self._sigma
 
         # ── mutable state (updated each tick) ──────────────────────────
         self.center   = np.array(pos, dtype=float)  # current centre (cx, cy)
@@ -128,8 +128,8 @@ class ThermalState:
 
         # Gaussian lifecycle envelope make sure above DEAD_THRESH for at least 90% of life
         self.envelope = np.exp(
-            -0.5 * ((self.age - self._mu) / self._sigma) ** 2
-        ) 
+            -0.5 * ((self.age - self._mu) * self._inv_sigma) ** 2
+        )
 
         # Kill once envelope falls below threshold after peak
         if self.age > self._mu and self.envelope < DEAD_THRESH:
@@ -138,6 +138,9 @@ class ThermalState:
             return False
 
         self.wind = ambient_wind
+
+        # wind drift: centre translates with ambient wind since spawn
+        self.center = self.pos + ambient_wind * self.age
 
         return True
 
@@ -202,11 +205,11 @@ class ThermalState:
             return np.zeros_like(X)
 
         w_mean = max(self.w_max * self.envelope, 0.1)
-        cx_z   = self.cx + (z / w_mean) * self.wind[0] * 0.1
-        cy_z   = self.cy + (z / w_mean) * self.wind[1] * 0.1
+        cx_z   = self.center[0] + (z / w_mean) * self.wind[0] * 0.1
+        cy_z   = self.center[1] + (z / w_mean) * self.wind[1] * 0.1
 
-        D = np.sqrt((X - cx_z) ** 2 + (Y - cy_z) ** 2)
-        R = D / self.R
+        D2 = (X - cx_z) ** 2 + (Y - cy_z) ** 2
+        R2 = D2 / (self.R ** 2)
 
         z_n   = z / self.z_i
         f_z   = z_n * np.exp(1.0 - z_n)
@@ -214,12 +217,13 @@ class ThermalState:
 
         W = np.zeros_like(X)
 
-        core = R <= 1.0
-        W[core] = w_peak * (1.0 - R[core] ** 2) ** 2 * f_z
+        core = R2 <= 1.0
+        W[core] = w_peak * (1.0 - R2[core]) ** 2 * f_z
 
-        ring = (R > 1.0) & (R <= 2.0)
+        ring = (R2 > 1.0) & (R2 <= 4.0)
         w_sink = w_peak * SINK_RATIO
-        W[ring] = -w_sink * (R[ring] - 1.0) * (2.0 - R[ring]) * f_z
+        r_ring = np.sqrt(R2[ring])
+        W[ring] = -w_sink * (r_ring - 1.0) * (2.0 - r_ring) * f_z
 
         return W
 
@@ -232,4 +236,4 @@ class ThermalState:
                 f'  R={self.R:.0f}m'
                 f'  T_life={self.T_life:.0f}s'
                 f'  envelope={self.envelope:.2f}'
-                f'  centre=({self.cx:.0f},{self.cy:.0f}))')
+                f'  centre=({self.center[0]:.0f},{self.center[1]:.0f}))')
