@@ -8,3 +8,4 @@ package.json
 package-lock.json
 .last_flight
 __pycache__
+soaring/data/animations
