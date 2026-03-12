@@ -2,3 +2,9 @@ node_modules
 
 soaring/data/telemetry
 soaring/data/thermals/
+soaring/**/__pycache__
+soaring/data/plots
+package.json
+package-lock.json
+.last_flight
+__pycache__
