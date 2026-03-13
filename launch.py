@@ -240,8 +240,27 @@ def main() -> None:
                 if name == 'mission' and proc.returncode == 0:
                     print(f'[launcher] {name} finished successfully.')
                     del _procs[name]
+                    # kill simulation processes before plotting
+                    print('[launcher] mission complete — stopping simulation…')
+                    sim_procs = {n: _procs.pop(n) for n in ('gz_sim', 'px4') if n in _procs}
+                    for sim_name, sim_proc in sim_procs.items():
+                        if sim_proc.poll() is None:
+                            print(f'[launcher] stopping {sim_name}')
+                            try:
+                                os.killpg(os.getpgid(sim_proc.pid), signal.SIGTERM)
+                            except ProcessLookupError:
+                                pass
+                    time.sleep(1.5)
+                    for sim_proc in sim_procs.values():
+                        if sim_proc.poll() is None:
+                            try:
+                                os.killpg(os.getpgid(sim_proc.pid), signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
                     if not args.no_plots:
                         _run_plotter()
+                    print('[launcher] done.')
+                    sys.exit(0)
                 else:
                     print(f'\033[31m[launcher] {name} exited (code {proc.returncode})\033[0m')
                     _shutdown()
