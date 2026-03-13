@@ -10,10 +10,19 @@ Run after `python3 launch.py` (PX4 + Gazebo + gz_sim must already be up).
 
 from pymavlink import mavutil
 import csv
+import sys
 import time
 import threading
 from datetime import datetime
 from pathlib import Path
+
+import argparse as _argparse
+_ap = _argparse.ArgumentParser(description='Straight-line mission')
+_ap.add_argument('--port',       type=int, default=14550,
+                 help='MAVLink UDP port (default 14550)')
+_ap.add_argument('--output-dir', type=str, default=None,
+                 help='Directory for telemetry CSV (default: soaring/data/telemetry/)')
+_mission_args = _ap.parse_args()
 
 # ── telemetry logger ──────────────────────────────────────────────────────────
 
@@ -26,12 +35,13 @@ class TelemetryLogger:
 
     _TELEMETRY_DIR = Path(__file__).parent / 'soaring' / 'data' / 'telemetry'
 
-    def __init__(self, master):
+    def __init__(self, master, output_dir=None):
         self._master   = master
         self._stop_evt = threading.Event()
         self._ts       = datetime.now().strftime('%Y%m%d_%H%M%S')
-        self._TELEMETRY_DIR.mkdir(parents=True, exist_ok=True)
-        self.csv_path  = self._TELEMETRY_DIR / f'flight_{self._ts}.csv'
+        out = Path(output_dir) if output_dir else self._TELEMETRY_DIR
+        out.mkdir(parents=True, exist_ok=True)
+        self.csv_path  = out / f'flight_{self._ts}.csv'
         self._thread   = threading.Thread(target=self._run, daemon=True)
 
     def start(self):
@@ -92,7 +102,10 @@ class TelemetryLogger:
 
 # ── connection ────────────────────────────────────────────────────────────────
 
-master = mavutil.mavlink_connection('udp:127.0.0.1:14550')
+# udp server mode: bind to slot port (14550+slot).
+# PX4's px4-rc.mavlink is patched by test_runner to add -o 14550+slot,
+# so this instance's PX4 sends directly to this port.
+master = mavutil.mavlink_connection(f'udp:127.0.0.1:{_mission_args.port}')
 master.wait_heartbeat()
 print(f"Connected: system {master.target_system}, component {master.target_component}")
 
@@ -309,17 +322,20 @@ set_param(master, 'BAT_EMERGEN_THR', 0)
 print("Waiting for EKF to settle (20 s)...")
 time.sleep(20)
 
-tel = TelemetryLogger(master)
+tel = TelemetryLogger(master, output_dir=_mission_args.output_dir)
 
 final_seq = upload_mission(master, HOME_LAT, HOME_LON, WAYPOINTS, ALT)
+mission_ok = False
 if final_seq is not None:
     tel.start()
     set_mode(master, 'MISSION')
     time.sleep(1)
     arm(master)
-    wait_mission_done(master, final_seq, timeout=300)
+    mission_ok = wait_mission_done(master, final_seq, timeout=300)
 
 stop_hb.set()
 tel.stop()
 tel.write_sentinel()
 print(f'[telemetry] saved → {tel.csv_path}')
+if not mission_ok:
+    sys.exit(1)

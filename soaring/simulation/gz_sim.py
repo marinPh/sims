@@ -41,14 +41,20 @@ from gz.msgs10.wind_pb2 import Wind
 from probability_map import load_tif
 from thermal_field import ThermalField
 
+import argparse as _argparse
+_ap = _argparse.ArgumentParser(description='Gazebo thermal wind bridge')
+_ap.add_argument('--seed',     type=int, default=42,        help='RNG seed for thermal field')
+_ap.add_argument('--instance', type=int, default=0,         help='PX4 instance index')
+_ap.add_argument('--world',    type=str, default='default', help='Gazebo world name')
+_args = _ap.parse_args()
 
 # ── configuration ──────────────────────────────────────────────────────────────
 
 TIFF_PATH    = '../data/probability_maps/val_de_ruz_may_avg.tif'
-WORLD        = 'default'
+WORLD        = _args.world
 
 # Must match your .sdf model name — check with: gz model --list
-MODEL        = 'advanced_plane_0'
+MODEL        = f'advanced_plane_{_args.instance}'
 
 # Background (ambient) horizontal wind [m/s], (u=east, v=north)
 AMBIENT_WIND = np.array([2.0, 0.5])
@@ -73,7 +79,7 @@ field = ThermalField(
     pmap,
     z_i        = Z_I,
     spawn_rate = SPAWN_RATE,
-    rng        = np.random.default_rng(42),
+    rng        = np.random.default_rng(_args.seed),
 )
 print(f'Map bounds : {pmap["bounds"]}')
 print(f'World      : {WORLD}  model: {MODEL}')

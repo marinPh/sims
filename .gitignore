@@ -9,3 +9,8 @@ package-lock.json
 .last_flight
 __pycache__
 soaring/data/animations
+logs
+results
+trials.csv
+seeds.txt
+s2.txt
